@@ -77,13 +77,17 @@ def compute_attrs(px, window=252):
             "dolvol": round(float(np.nanmedian(cw * vw)) / 1e6, 1)}
 
 def current_signal(px, within=7, base_look=45):
-    """🔥买点 = 经样本外验证的「深基反弹+放量点火」配置(2021-23训练/2024-26样本外均跑赢基线,胜率57%):
+    """买点 = 经样本外验证的「深基反弹+放量点火」配置(config⑤,2021-23训练/2024-26样本外均跑赢基线,胜率约57%):
        近 within 日内 RSI 上穿60,且同时满足:
          · base期(前45根)RSI 曾 ≤37(深超卖)
          · 价格 ≤ 52周高的97%(未追高,是从回调中恢复)
          · 前期回调 ≥11%(有像样的下跌后再起)
          · 突破当日成交量 ≥ 20日均量(放量点火)
          · 上穿后收盘站稳中轨(20MA)2根(防一日假突破)
+       返回值区分两类(样本外二者表现相当,仅形态不同):
+         · 🔥"买点" = 经典首次上穿:自深超卖低点以来首次上穿60(中途RSI未曾>60)。
+         · ⚡"回插买点" = 高位回插:之前RSI已>60、短暂跌破后再上穿(如MU)。样本外验证此条件不增收益,
+            故不硬性过滤,仅作标注供你按形态自行取舍。
        👀观察 = 上述点火刚发生、但'站稳2根'尚未确认。"""
     c = np.asarray(px["close"], float); v = np.asarray(px.get("volume", []), float)
     n = len(c)
@@ -101,6 +105,9 @@ def current_signal(px, within=7, base_look=45):
         if np.isnan(seg).any():
             continue
         rsi_min_base = float(np.min(seg))                    # 深超卖
+        lo_idx = a + int(np.argmin(seg))                     # 深超卖低点的位置
+        prior_max = float(np.max(rsi[lo_idx:ci])) if ci > lo_idx else 0.0
+        first_cross = prior_max <= 60                         # 自深超卖低点以来「首次」上穿60(中途RSI未曾>60)
         hi52 = float(np.max(c[max(0, ci-252):ci+1])); dist52 = c[ci]/hi52 if hi52 > 0 else 1.0
         hi_before = float(np.max(c[max(0, ci-90):max(1, ci-base_look)])) if ci-base_look > 0 else c[ci]
         base_low = float(np.min(c[a:ci+1]))
@@ -111,10 +118,46 @@ def current_signal(px, within=7, base_look=45):
             continue
         if ci + 2 <= i:                                      # 可评估"站稳2根"
             if c[ci+1] >= m20[ci+1]*0.99 and c[ci+2] >= m20[ci+2]*0.99:
-                return "买点"
+                return "买点" if first_cross else "回插买点"   # 经典首次上穿 / 高位回插(仅标注,不过滤)
         else:
             watch = True                                     # 刚点火,待确认
     return "观察" if watch else "—"
+
+# —— 杠杆/反向 ETF 黑名单(历史净亏 −$15.7k 的根因,红线:不做) ——
+LEV_INV = {"SQQQ","SOXS","SOXL","TZA","TNA","YINN","YANG","SPXU","SPXS","UPRO","TQQQ",
+           "UVXY","SVXY","LABU","LABD","FAS","FAZ","SDOW","UDOW","NUGT","DUST","JNUG",
+           "BOIL","KOLD","WEBL","WEBS","NAIL","DRIP","GUSH","ERX","ERY","SPXL","TMF","TMV",
+           "FNGU","FNGD","BULZ","TSLL","NVDL","NVDX","CONL","TSLQ","TSLS","AGQ","ZSL"}
+
+def is_leveraged(ticker):
+    return str(ticker).strip().upper() in LEV_INV
+
+def _atr(px, n=14):
+    h = np.asarray(px.get("high", []), float); l = np.asarray(px.get("low", []), float); c = np.asarray(px["close"], float)
+    if len(c) < n + 1 or len(h) != len(c): return float("nan")
+    pc = c[:-1]; tr = np.maximum(h[1:] - l[1:], np.maximum(np.abs(h[1:] - pc), np.abs(l[1:] - pc)))
+    return float(np.mean(tr[-n:]))
+
+def trend_signal(px):
+    """趋势动量入场(匹配你赢家画像): 金叉 + 站上MA10/MA30 + RSI 58–72(+突破布林上轨加分)。
+       返回当前是否符合 + 逐项✓/✗ + 建议止损(−2×ATR)/2R目标。⚠ 非投资建议,样本外≈买入持有,价值在纪律。"""
+    c = np.asarray(px["close"], float); n = len(c)
+    if n < 60:
+        return {"verdict": "—", "checks": [], "stop": None, "target": None, "price": None, "rsi": None}
+    ma10 = _sma(c, 10); ma30 = _sma(c, 30); m20 = _sma(c, 20); rsi = _rsi(c, 14); i = n - 1
+    sd = float(np.std(c[i-19:i+1], ddof=0)) if i >= 19 else float("nan")
+    upper = m20[i] + 2*sd
+    golden = bool(ma10[i] > ma30[i]); a10 = bool(c[i] > ma10[i]); a30 = bool(c[i] > ma30[i])
+    rsi_ok = bool(58 <= rsi[i] <= 72); breakout = bool(c[i] > upper)
+    checks = [("金叉 MA10>MA30", golden), ("站上 MA10", a10), ("站上 MA30", a30),
+              ("RSI 58–72(现 %.0f)" % rsi[i], rsi_ok), ("突破布林上轨(加分项)", breakout)]
+    core = golden and a10 and a30 and rsi_ok
+    verdict = "强势突破" if (core and breakout) else ("趋势买点" if core else "—")
+    atr = _atr(px)
+    stop = round(float(c[i] - 2*atr), 2) if atr == atr else None
+    target = round(float(c[i] + 4*atr), 2) if atr == atr else None   # R=2×ATR, R:R=2
+    return {"verdict": verdict, "checks": checks, "price": round(float(c[i]), 2),
+            "stop": stop, "target": target, "rsi": round(float(rsi[i]), 0)}
 
 def score_attrs(a, P=None):
     P = P or load_params()
@@ -143,7 +186,8 @@ def score_attrs(a, P=None):
 def evaluate(ticker, P=None):
     px = fetch_yahoo(ticker)
     a = compute_attrs(px); sc = score_attrs(a, P)
-    return {"ticker": ticker.upper(), "attrs": a, "signal": current_signal(px), **sc, "px": px}
+    return {"ticker": ticker.upper(), "attrs": a, "signal": current_signal(px),
+            "trend": trend_signal(px), "is_lev": is_leveraged(ticker), **sc, "px": px}
 
 def scan_universe(tickers, P=None, max_workers=8, progress=None):
     from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -151,16 +195,19 @@ def scan_universe(tickers, P=None, max_workers=8, progress=None):
     tickers = [t.strip().upper() for t in tickers if t and t.strip()]
     out = []; done = 0
     def one(t):
+        if is_leveraged(t):
+            return {"ticker": t, "lev": True}                # 杠杆/反向ETF: 红线, 直接剔除
         try:
             px = fetch_yahoo(t); a = compute_attrs(px); sc = score_attrs(a, P)
-            return {"ticker": t, **a, "score": sc["score"], "tier": sc["tier"], "signal": current_signal(px)}
+            return {"ticker": t, **a, "score": sc["score"], "tier": sc["tier"],
+                    "signal": current_signal(px), "tsig": trend_signal(px)["verdict"]}
         except Exception:
             return {"ticker": t, "error": True}
     with ThreadPoolExecutor(max_workers=max_workers) as ex:
         futs = {ex.submit(one, t): t for t in tickers}
         for f in as_completed(futs):
             r = f.result()
-            if r and not r.get("error"): out.append(r)
+            if r and not r.get("error") and not r.get("lev"): out.append(r)
             done += 1
             if progress: progress(done, len(tickers))
     out.sort(key=lambda x: -x["score"])
