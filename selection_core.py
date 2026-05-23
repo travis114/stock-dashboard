@@ -175,11 +175,11 @@ def trend_signal(px):
     m20 = _sma(c, 20); rsi = _rsi(c, 14); i = n - 1
     mtf = mtf_context(px)
     sd = float(np.std(c[i-19:i+1], ddof=0)); upper = m20[i] + 2*sd
-    rsi_ok = bool(55 <= rsi[i] <= 82); breakout = bool(c[i] > upper)
+    rsi_ok = bool(55 <= rsi[i] <= 72); breakout = bool(c[i] > upper)
     checks = [("月线强(月RSI %s)" % mtf["mrsi"], mtf["monthly_strong"]),
               ("周线顺(金叉+站上周MA30)", mtf["weekly_ok"]),
               ("日线均线多头 MA10>20>30>50", mtf["ma_stack"]),
-              ("日线RSI 55–82(现 %.0f)" % rsi[i], rsi_ok),
+              ("日线RSI 55–72·不追高(现 %.0f)" % rsi[i], rsi_ok),
               ("RBR结构(rally-base-rally)", mtf["rbr"]),
               ("突破布林上轨(加分项)", breakout)]
     core = mtf["resonance"] and rsi_ok
@@ -191,26 +191,23 @@ def trend_signal(px):
             "stop": stop, "target": target, "rsi": round(float(rsi[i]), 0), "mtf": mtf}
 
 def daily_signal(px):
-    """📍今日关注: 三周期共振(月线强+周线顺+日线均线多头)且当天刚触发(突破20日新高 / 刚上穿布林上轨)、放量≥1.2×、
-       日RSI 55–82、价≥$10、日额≥$20M。RBR结构作标注。不满足返回 {'triggered': False}。⚠ 非投资建议。"""
+    """📍今日关注: 三周期共振(月线强+周线顺+日线均线多头) + 回调后RSI『首次上穿60』(早入场,不追高):
+       近2日内RSI上穿60、现RSI 60–70、前期RSI曾回落≤52(有base)、放量≥1.2×、价≥$10、日额≥$20M。
+       RBR结构作标注。不满足返回 {'triggered': False}。⚠ 非投资建议。"""
     c = np.asarray(px["close"], float); v = np.asarray(px.get("volume", []), float); n = len(c)
     if n < 260 or len(v) != n:
         return {"triggered": False}
-    m20 = _sma(c, 20); rsi = _rsi(c, 14); i = n - 1
+    rsi = _rsi(c, 14); i = n - 1
     price = float(c[i]); dvol = float(np.median(c[-60:] * v[-60:])) / 1e6
     if price < 10 or dvol < 20: return {"triggered": False}
-    if not (55 <= rsi[i] <= 82): return {"triggered": False}
+    crossed = any(rsi[i-d] > 60 and rsi[i-d-1] <= 60 for d in (0, 1))    # 近2日内首次上穿60
+    if not (crossed and 60 < rsi[i] <= 70): return {"triggered": False}  # 早入场, 不追高
+    if float(np.min(rsi[i-15:i-1])) > 52: return {"triggered": False}    # 必须从回调/base里上来(RBR的base)
     mtf = mtf_context(px)
     if not mtf["resonance"]: return {"triggered": False}     # 必须三周期共振
-    sd = float(np.std(c[i-19:i+1], ddof=0)); upper = m20[i] + 2*sd
-    upper_prev = m20[i-1] + 2*float(np.std(c[i-20:i], ddof=0))
     volavg = float(np.mean(v[i-19:i+1])); vsurge = v[i] / volavg if volavg > 0 else 0.0
-    new20 = price >= float(np.max(c[i-20:i]))
-    fresh_break = (c[i] > upper) and (c[i-1] <= upper_prev)
-    if not (new20 or fresh_break) or vsurge < 1.2: return {"triggered": False}
-    trig = []
-    if new20: trig.append("破20日新高")
-    if fresh_break: trig.append("刚破上轨")
+    if vsurge < 1.2: return {"triggered": False}
+    trig = ["RSI上穿60"]
     if mtf["rbr"]: trig.append("RBR")
     atr = _atr(px)
     return {"triggered": True, "ticker": None, "trig": "+".join(trig), "vsurge": round(vsurge, 1),
