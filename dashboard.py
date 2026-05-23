@@ -15,6 +15,8 @@ st.set_page_config(page_title="选股适配度 Dashboard", page_icon="📈", lay
 st.markdown("""<style>
 [data-testid="stMetric"]{background:#f7f9fc;border:1px solid #e6ebf2;border-radius:12px;padding:10px 14px;}
 [data-testid="stMetricLabel"]{color:#5b6b7f;font-size:13px;}
+[data-testid="stMetricValue"]{color:#1f3a5f;font-weight:800;}
+[data-testid="stMetricValue"] *{color:#1f3a5f;}
 .hero{background:linear-gradient(95deg,#1f3a5f,#2e86c1);color:#fff;padding:16px 20px;border-radius:14px;margin-bottom:14px;}
 .hero h1{margin:0;font-size:25px;font-weight:800;}
 .hero p{margin:5px 0 0;opacity:.92;font-size:13px;}
@@ -105,10 +107,9 @@ with tab_scan:
         tickers = [x for x in re.split(r"[\s,;]+", raw.upper()) if x]
     else:
         tickers = load_universe()
-    cga, cgb, cgc = st.columns([1, 1, 1.4])
-    only_pref = cga.checkbox("只看「优选」", value=True)
-    only_trend = cgb.checkbox("只看趋势买点", value=True, help="🚀强势突破 / ✅趋势买点(金叉+站上MA10/30+RSI 58–72)")
-    minsc = cgc.slider("最低适配度", 0, 100, 60)
+    cga, cgb = st.columns([1, 1.6])
+    only_trend = cga.checkbox("只看趋势买点", value=True, help="🚀强势突破 / ✅趋势买点(金叉+站上MA10/30+RSI 58–72)")
+    minsc = cgb.slider("最低适配度", 0, 100, 60)
     st.caption(f"待扫描 {len(tickers)} 只 · 杠杆/反向 ETF 已自动剔除(红线)· 约 2–5 分钟(8 线程,结果缓存本次会话)")
     if st.button("开始扫描", type="primary", disabled=(len(tickers) == 0)):
         prog = st.progress(0.0, text="抓取行情中…")
@@ -122,21 +123,16 @@ with tab_scan:
         TBADGE = {"强势突破": "🚀 强势突破", "趋势买点": "✅ 趋势买点", "—": "· —"}
         n_trend = int(raw_df["tsig"].isin(["趋势买点", "强势突破"]).sum())
         n_break = int((raw_df["tsig"] == "强势突破").sum())
-        n_buy = int((raw_df["signal"] == "买点").sum())
-        n_pref = int((raw_df["tier"] == "优选").sum())
-        k = st.columns(5)
+        k = st.columns(3)
         k[0].metric("有效标的", len(raw_df))
-        k[1].metric("🟢 优选", n_pref)
-        k[2].metric("✅ 趋势买点", n_trend)
-        k[3].metric("🚀 强势突破", n_break)
-        k[4].metric("🔥 深基买点(参考)", n_buy)
+        k[1].metric("✅ 趋势买点", n_trend)
+        k[2].metric("🚀 强势突破", n_break)
         sdf = raw_df.copy()
         sdf["分层"] = sdf["tier"].map(lambda x: TIER_BADGE.get(x, x))
         sdf["趋势信号"] = sdf["tsig"].map(lambda x: TBADGE.get(x, x))
         sdf = sdf.rename(columns={"ticker":"标的","score":"适配度","trend":"趋势性","ret":"近1年涨跌","medp":"中位价$","dolvol":"日成交额(M)"})
         sdf["_pri"] = sdf["tsig"].map({"强势突破": 0, "趋势买点": 1}).fillna(2)
         view = sdf
-        if only_pref: view = view[view["tier"] == "优选"]
         if only_trend: view = view[view["tsig"].isin(["趋势买点", "强势突破"])]
         view = view[view["适配度"] >= minsc].sort_values(["_pri", "适配度"], ascending=[True, False])
         st.dataframe(view[["标的","适配度","分层","趋势信号","中位价$","日成交额(M)","趋势性","近1年涨跌"]],
