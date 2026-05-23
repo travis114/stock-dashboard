@@ -144,15 +144,17 @@ def mtf_context(px):
        依据你实盘: 月线强时胜率74% vs 中性45%; 周线顺 > 逆周线; 多周期共振胜率最高(≈88%)。"""
     import pandas as pd
     c = np.asarray(px["close"], float); n = len(c)
-    o = {"weekly_ok": False, "monthly_strong": False, "ma_stack": False, "rbr": False, "mrsi": None, "resonance": False}
+    o = {"weekly_ok": False, "monthly_strong": False, "ma_stack": False, "rbr": False, "mrsi": None, "wrsi": None, "resonance": False}
     if n < 200: return o
     ma10 = _sma(c, 10); ma20 = _sma(c, 20); ma30 = _sma(c, 30); ma50 = _sma(c, 50); i = n - 1
     o["ma_stack"] = bool(ma10[i] > ma20[i] > ma30[i] > ma50[i])
     s = pd.Series(c, index=pd.to_datetime(px["dates"]))
     w = s.resample("W-FRI").last().dropna().values
     if len(w) >= 35:
-        wma10 = _sma(w, 10); wma30 = _sma(w, 30)
-        o["weekly_ok"] = bool(wma10[-1] > wma30[-1] and w[-1] > wma30[-1])
+        wma10 = _sma(w, 10); wma30 = _sma(w, 30); wr = _rsi(w, 14)
+        wrsi = wr[-1] if wr[-1] == wr[-1] else None
+        o["wrsi"] = round(float(wrsi), 0) if wrsi is not None else None
+        o["weekly_ok"] = bool(wma10[-1] > wma30[-1] and w[-1] > wma30[-1] and (wrsi is not None and wrsi <= 70))
     m = s.resample("ME").last().dropna().values
     if len(m) >= 16:
         mr = _rsi(m, 14); mrsi = mr[-1] if mr[-1] == mr[-1] else None
@@ -177,7 +179,7 @@ def trend_signal(px):
     sd = float(np.std(c[i-19:i+1], ddof=0)); upper = m20[i] + 2*sd
     rsi_ok = bool(55 <= rsi[i] <= 72); breakout = bool(c[i] > upper)
     checks = [("月线强(月RSI %s)" % mtf["mrsi"], mtf["monthly_strong"]),
-              ("周线顺(金叉+站上周MA30)", mtf["weekly_ok"]),
+              ("周线顺(金叉+站上周MA30、周RSI≤70不超买)", mtf["weekly_ok"]),
               ("日线均线多头 MA10>20>30>50", mtf["ma_stack"]),
               ("日线RSI 55–72·不追高(现 %.0f)" % rsi[i], rsi_ok),
               ("RBR结构(rally-base-rally)", mtf["rbr"]),
@@ -211,7 +213,7 @@ def daily_signal(px):
     if mtf["rbr"]: trig.append("RBR")
     atr = _atr(px)
     return {"triggered": True, "ticker": None, "trig": "+".join(trig), "vsurge": round(vsurge, 1),
-            "rsi": round(float(rsi[i]), 0), "mrsi": mtf["mrsi"], "rbr": mtf["rbr"], "price": round(price, 2),
+            "rsi": round(float(rsi[i]), 0), "mrsi": mtf["mrsi"], "wrsi": mtf["wrsi"], "rbr": mtf["rbr"], "price": round(price, 2),
             "dist52": round(price / float(np.max(c[-252:])), 2), "ret6": float(c[i] / c[i-126] - 1),
             "stop": round(price - 2*atr, 2) if atr == atr else None,
             "target": round(price + 4*atr, 2) if atr == atr else None}
