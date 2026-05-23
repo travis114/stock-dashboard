@@ -48,7 +48,36 @@ SCORE_COL = st.column_config.ProgressColumn("适配度", min_value=0, max_value=
 PRICE_COL = st.column_config.NumberColumn("中位价$", format="$%.1f")
 VOL_COL = st.column_config.NumberColumn("日成交额(M)", format="$%.0fM")
 
-tab1, tab_scan, tab3 = st.tabs(["🎯 单只评分器", "🔍 批量扫描(全市场)", "ℹ️ 说明"])
+tab_daily, tab1, tab_scan, tab3 = st.tabs(["📍 今日关注", "🎯 单只评分器", "🔍 批量扫描(全市场)", "ℹ️ 说明"])
+
+# ---------- Tab 今日关注 ----------
+with tab_daily:
+    st.markdown("**只列当天刚触发(突破新高 / 刚破上轨 / 新金叉 + 放量)的趋势龙头,按热度排序。在涨但今天没新动作的不列 —— 每天只看这一屏。**")
+    dtk = load_universe()
+    st.caption(f"扫描池 {len(dtk)} 只 · 杠杆/反向 ETF 已剔除 · 约 2–5 分钟")
+    if st.button("🔄 扫描今日关注", type="primary", disabled=(len(dtk) == 0)):
+        prog = st.progress(0.0, text="抓取行情中…")
+        def cbd(d, n): prog.progress(min(d/n, 1.0), text=f"已扫描 {d}/{n}")
+        st.session_state["daily_res"] = sc.scan_daily(dtk, max_workers=8, progress=cbd)
+        prog.empty()
+    dres = st.session_state.get("daily_res")
+    if dres is not None:
+        if len(dres) == 0:
+            st.info("今天没有符合条件的新触发 —— 空仓等待也是一种纪律。")
+        else:
+            st.metric("📍 今日触发", len(dres))
+            ddf = pd.DataFrame(dres).head(15).rename(columns={
+                "ticker":"代码","heat":"热度","price":"价$","rsi":"RSI","vsurge":"放量x",
+                "dist52":"离52高","trig":"今日触发","stop":"止损$","target":"目标$"})
+            st.dataframe(ddf[["代码","热度","价$","RSI","放量x","离52高","今日触发","止损$","目标$"]],
+                         width='stretch', hide_index=True,
+                         column_config={"热度": st.column_config.ProgressColumn("热度", min_value=0, max_value=100, format="%d"),
+                                        "价$": st.column_config.NumberColumn(format="$%.1f"),
+                                        "止损$": st.column_config.NumberColumn(format="$%.1f"),
+                                        "目标$": st.column_config.NumberColumn(format="$%.1f")})
+            st.caption("热度 = 相对强度60% + 放量40%。进场按『止损$』(−2×ATR)、R:R≥2、跌破MA10离场、每笔1%风险。⚠ 非投资建议。")
+    else:
+        st.info("点「🔄 扫描今日关注」,给你当天最多 ~15 只刚触发的票,其余不用看。")
 
 # ---------- Tab1 ----------
 with tab1:

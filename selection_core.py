@@ -159,6 +159,62 @@ def trend_signal(px):
     return {"verdict": verdict, "checks": checks, "price": round(float(c[i]), 2),
             "stop": stop, "target": target, "rsi": round(float(rsi[i]), 0)}
 
+def daily_signal(px):
+    """📍今日关注: 当天刚触发(突破20日新高 / 刚上穿布林上轨 / 近5日新金叉)且放量≥1.2×,
+       并处于确认上升趋势(MA10>MA30>MA50、MA30上行)、RSI 55–72、价≥$10、日额≥$20M。
+       不满足返回 {'triggered': False}。⚠ 非投资建议。"""
+    c = np.asarray(px["close"], float); v = np.asarray(px.get("volume", []), float); n = len(c)
+    if n < 260 or len(v) != n:
+        return {"triggered": False}
+    ma10 = _sma(c, 10); ma30 = _sma(c, 30); ma50 = _sma(c, 50); m20 = _sma(c, 20); rsi = _rsi(c, 14); i = n - 1
+    price = float(c[i]); dvol = float(np.median(c[-60:] * v[-60:])) / 1e6
+    if price < 10 or dvol < 20: return {"triggered": False}
+    if not (ma10[i] > ma30[i] > ma50[i] and ma30[i] > ma30[i-21]): return {"triggered": False}
+    if not (55 <= rsi[i] <= 72): return {"triggered": False}
+    sd = float(np.std(c[i-19:i+1], ddof=0)); upper = m20[i] + 2*sd
+    upper_prev = m20[i-1] + 2*float(np.std(c[i-20:i], ddof=0))
+    volavg = float(np.mean(v[i-19:i+1])); vsurge = v[i] / volavg if volavg > 0 else 0.0
+    new20 = price >= float(np.max(c[i-20:i]))
+    fresh_break = (c[i] > upper) and (c[i-1] <= upper_prev)
+    fresh_golden = any(ma10[i-d] <= ma30[i-d] for d in range(1, 6))
+    trig = []
+    if new20: trig.append("破20日新高")
+    if fresh_break: trig.append("刚破上轨")
+    if fresh_golden: trig.append("新金叉")
+    if not trig or vsurge < 1.2: return {"triggered": False}
+    atr = _atr(px)
+    return {"triggered": True, "ticker": None, "trig": "+".join(trig), "vsurge": round(vsurge, 1),
+            "rsi": round(float(rsi[i]), 0), "price": round(price, 2),
+            "dist52": round(price / float(np.max(c[-252:])), 2), "ret6": float(c[i] / c[i-126] - 1),
+            "stop": round(price - 2*atr, 2) if atr == atr else None,
+            "target": round(price + 4*atr, 2) if atr == atr else None}
+
+def scan_daily(tickers, max_workers=8, progress=None):
+    """扫描全市场, 只返回'今日刚触发'的标的, 按热度(相对强度60% + 放量40%)排序。已剔除杠杆/反向ETF。"""
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+    import bisect
+    tickers = [t.strip().upper() for t in tickers if t and t.strip() and not is_leveraged(t)]
+    hits = []; done = 0; total = max(1, len(tickers))
+    def one(t):
+        try:
+            d = daily_signal(fetch_yahoo(t))
+            if d.get("triggered"): d["ticker"] = t; return d
+        except Exception:
+            return None
+    with ThreadPoolExecutor(max_workers=max_workers) as ex:
+        futs = {ex.submit(one, t): t for t in tickers}
+        for f in as_completed(futs):
+            r = f.result()
+            if r: hits.append(r)
+            done += 1
+            if progress: progress(done, total)
+    if hits:
+        rs = sorted(h["ret6"] for h in hits); vs = sorted(h["vsurge"] for h in hits); m = len(hits)
+        for h in hits:
+            h["heat"] = round(100 * (0.6 * bisect.bisect_right(rs, h["ret6"]) / m + 0.4 * bisect.bisect_right(vs, h["vsurge"]) / m), 0)
+        hits.sort(key=lambda x: -x["heat"])
+    return hits
+
 def score_attrs(a, P=None):
     P = P or load_params()
     def z(x, key): m, s = P[key]; return (x - m) / (s + 1e-9)
