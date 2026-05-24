@@ -124,6 +124,22 @@ with tab_daily:
                                         "止损$": st.column_config.NumberColumn(format="$%.1f"),
                                         "目标$": st.column_config.NumberColumn(format="$%.1f")})
             st.caption("热度 = 相对强度60% + 放量40%。进场按『止损$』(−2×ATR)、R:R≥2、跌破MA10离场、每笔1%风险。⚠ 非投资建议。")
+            st.markdown("---")
+            ccs = st.columns([1.2, 1, 1])
+            sel = ccs[0].selectbox("查看 K 线", [d["ticker"] for d in dres], index=0)
+            d_days = ccs[1].slider("显示天数", 60, 400, 180, 20, key="d_days")
+            d_bbk = ccs[2].slider("布林带 σ", 1.0, 3.0, 2.0, 0.5, key="d_bbk")
+            if sel:
+                try:
+                    with st.spinner(f"加载 {sel} K线…"):
+                        _px = evaluate_cached(sel)["px"]
+                    if HAS_PLOTLY:
+                        st.plotly_chart(make_chart(_px, d_days, d_bbk, sel), use_container_width=True)
+                    else:
+                        st.line_chart(pd.DataFrame({"收盘": _px["close"]}, index=pd.to_datetime(_px["dates"])).tail(int(d_days)), height=340)
+                        st.caption("装 plotly 看专业K线: pip install plotly")
+                except Exception as e:
+                    st.error(f"K线加载失败:{e}")
     else:
         st.info("点「🔄 扫描今日关注」,给你当天最多 ~15 只刚触发的票,其余不用看。")
 
@@ -152,8 +168,8 @@ with tab1:
             m[3].metric("近1年涨跌", f"{a['ret']*100:+.0f}%")
             m[4].metric("年化波动", f"{a['vol']*100:.0f}%")
             cc1, cc2 = st.columns([1, 1])
-            days = cc1.slider("显示天数", 60, 400, 180, 20)
-            bbk = cc2.slider("布林带 σ", 1.0, 3.0, 2.0, 0.5)
+            days = cc1.slider("显示天数", 60, 400, 180, 20, key="s_days")
+            bbk = cc2.slider("布林带 σ", 1.0, 3.0, 2.0, 0.5, key="s_bbk")
             px = r["px"]
             if HAS_PLOTLY:
                 st.plotly_chart(make_chart(px, days, bbk, r["ticker"]), use_container_width=True)
