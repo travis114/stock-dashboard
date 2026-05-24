@@ -8,6 +8,43 @@ import os, re
 import numpy as np, pandas as pd
 import streamlit as st
 import selection_core as sc
+try:
+    import plotly.graph_objects as pgo
+    from plotly.subplots import make_subplots as _mksub
+    HAS_PLOTLY = True
+except Exception:
+    HAS_PLOTLY = False
+
+def make_chart(px, days, bbk, tk):
+    """专业K线: 蜡烛 + MA10/30/50 + 布林带(中轨虚线,上下轨阴影) + 绿三角『回调后RSI上穿60』信号 + RSI(14)副图。"""
+    dts = pd.to_datetime(px["dates"]); c = np.asarray(px["close"], float)
+    o = px["open"]; h = px["high"]; l = px["low"]
+    cser = pd.Series(c, index=dts)
+    ma10 = cser.rolling(10).mean(); ma20 = cser.rolling(20).mean(); ma30 = cser.rolling(30).mean(); ma50 = cser.rolling(50).mean()
+    sd = cser.rolling(20).std(ddof=0); ub = ma20 + bbk*sd; lb = ma20 - bbk*sd
+    rsi = sc._rsi(c, 14); N = int(min(days, len(c))); sl = slice(-N, None); start = len(c) - N
+    marks = [k for k in range(20, len(c)) if k >= start and rsi[k] > 60 and rsi[k-1] <= 60 and float(np.nanmin(rsi[k-15:k])) <= 52]
+    fig = _mksub(rows=2, cols=1, shared_xaxes=True, vertical_spacing=0.04, row_heights=[0.74, 0.26])
+    x = dts[sl]
+    fig.add_trace(pgo.Scatter(x=x, y=ub.values[sl], line=dict(color="#5c6675", width=1), name="upper"), row=1, col=1)
+    fig.add_trace(pgo.Scatter(x=x, y=lb.values[sl], line=dict(color="#5c6675", width=1), fill="tonexty", fillcolor="rgba(125,138,156,0.10)", name="lower"), row=1, col=1)
+    fig.add_trace(pgo.Scatter(x=x, y=ma20.values[sl], line=dict(color="#e8a838", width=1.3, dash="dash"), name="mid"), row=1, col=1)
+    fig.add_trace(pgo.Candlestick(x=x, open=o[-N:], high=h[-N:], low=l[-N:], close=px["close"][-N:], name=tk,
+        increasing_line_color="#26a69a", decreasing_line_color="#ef5350", increasing_fillcolor="#26a69a", decreasing_fillcolor="#ef5350"), row=1, col=1)
+    for nm, ma, col in [("MA10", ma10, "#5b9bd5"), ("MA30", ma30, "#9b8cff"), ("MA50", ma50, "#6b7787")]:
+        fig.add_trace(pgo.Scatter(x=x, y=ma.values[sl], line=dict(color=col, width=1), name=nm), row=1, col=1)
+    if marks:
+        fig.add_trace(pgo.Scatter(x=[dts[k] for k in marks], y=[l[k]*0.985 for k in marks], mode="markers",
+            marker=dict(symbol="triangle-up", size=11, color="#26d07c"), name="signal"), row=1, col=1)
+    fig.add_trace(pgo.Scatter(x=x, y=rsi[sl], line=dict(color="#5b9bd5", width=1), name="RSI"), row=2, col=1)
+    fig.add_hline(y=60, line=dict(color="#e8a838", width=1, dash="dot"), row=2, col=1)
+    fig.add_hline(y=70, line=dict(color="#ef5350", width=1, dash="dot"), row=2, col=1)
+    fig.update_layout(template="plotly_dark", paper_bgcolor="#0a0e14", plot_bgcolor="#0a0e14", height=520,
+        margin=dict(l=6, r=6, t=26, b=6), xaxis_rangeslider_visible=False,
+        legend=dict(orientation="h", y=1.05, x=0, font=dict(size=10)), font=dict(color="#c9d3df", size=11),
+        title=dict(text=f"{tk} — price + BB(20,{bbk}σ) + RSI(14)", font=dict(size=13, color="#c9d3df")))
+    fig.update_xaxes(gridcolor="#1a212c"); fig.update_yaxes(gridcolor="#1a212c")
+    return fig
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 st.set_page_config(page_title="选股适配度 Dashboard", page_icon="📈", layout="wide")
@@ -114,28 +151,34 @@ with tab1:
             m[2].metric("趋势性", f"{a['trend']*100:.0f}%")
             m[3].metric("近1年涨跌", f"{a['ret']*100:+.0f}%")
             m[4].metric("年化波动", f"{a['vol']*100:.0f}%")
-            cL, cR = st.columns([3, 2])
-            with cL:
-                px = r["px"]
+            cc1, cc2 = st.columns([1, 1])
+            days = cc1.slider("显示天数", 60, 400, 180, 20)
+            bbk = cc2.slider("布林带 σ", 1.0, 3.0, 2.0, 0.5)
+            px = r["px"]
+            if HAS_PLOTLY:
+                st.plotly_chart(make_chart(px, days, bbk, r["ticker"]), use_container_width=True)
+            else:
                 dfp = pd.DataFrame({"收盘": px["close"]}, index=pd.to_datetime(px["dates"]))
                 dfp["MA10"] = dfp["收盘"].rolling(10).mean(); dfp["MA30"] = dfp["收盘"].rolling(30).mean()
                 m20 = dfp["收盘"].rolling(20).mean(); sd = dfp["收盘"].rolling(20).std(ddof=0)
-                dfp["布林上轨"] = m20 + 2*sd; dfp["布林下轨"] = m20 - 2*sd
-                st.line_chart(dfp.tail(180), height=300)
-            with cR:
+                dfp["布林上轨"] = m20 + bbk*sd; dfp["布林下轨"] = m20 - bbk*sd
+                st.line_chart(dfp.tail(int(days)), height=340)
+                st.caption("装 plotly 看专业K线: pip install plotly")
+            cL, cR = st.columns([1, 1])
+            with cL:
                 tr = r.get("trend", {})
-                st.write("**趋势入场清单(你赢家的画像)**")
+                st.write("**趋势入场清单(三周期共振)**")
                 for label, ok in tr.get("checks", []):
                     st.write(("✅ " if ok else "❌ ") + label)
                 if tv in ("趋势买点", "强势突破") and tr.get("stop") is not None:
                     st.success(f"进场参考 · 止损 ${tr['stop']}(−2×ATR) · 目标 ${tr['target']}(R:R≥2) · 跌破MA10离场 · 最长持有~15天 · 每笔1%权益风险")
                 elif not r.get("is_lev"):
-                    st.caption("当前不满足趋势入场画像(需 金叉 + 站上MA10/MA30 + RSI 58–72)。逆势/弱势不进。")
-                st.markdown("---")
+                    st.caption("当前不满足三周期共振(需 月线强 + 周线顺·RSI≤70 + 日线均线多头)。逆势/超买不进。")
+            with cR:
                 st.write("**选股体检(贵·活·强)**")
                 for x in r["reasons"]:
                     st.write("·", x)
-                st.caption("另:深基反弹信号 = " + SIG_BADGE.get(r["signal"], r["signal"]) + "(仅参考;样本外≈买入持有,别当圣杯)")
+                st.caption("图上绿三角 = 历史『回调后 RSI 上穿60』触发点(早入场)。深基反弹信号 = " + SIG_BADGE.get(r["signal"], r["signal"]) + "(仅参考)。⚠ 非投资建议")
         except Exception as e:
             st.error(f"出错:{e}(请检查代码或联网)")
 
